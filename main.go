@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"regexp"
 )
 
 const (
@@ -28,12 +27,18 @@ func main() {
 		flag.Usage()
 		os.Exit(1)
 	}
-	res := rexes(flag.Args())
 	users := list(*userdir)
-	users = filter(users, res, *not)
+	var fn func([]string, []string) []string
+	if *not {
+		fn = minus
+	} else {
+		fn = intersect
+	}
+	users = fn(users, flag.Args())
 	for _, u := range users {
 		log.Printf("user %s matches\n", u)
 	}
+	log.Printf("total %d match(es)\n", len(users))
 }
 
 func Usage() {
@@ -69,34 +74,34 @@ func list(filename string) []string {
 	return ss
 }
 
-func filter(users []string, res []regexp.Regexp, inverse bool) (ss []string) {
-	for _, id := range flag.Args() {
-		matchesAll := true
-		for _, r := range res {
-			match := r.MatchString(id)
-			if inverse {
-				match = !match
-			}
-			if match {
-				matchesAll = false
-				break
-			}
-		}
-		if matchesAll {
-			ss = append(ss, id)
+// result order undefined
+func intersect(set1 []string, set2 []string) (ss []string) {
+	m1 := make(map[string]bool, len(set1))
+	for _, s := range set1 {
+		m1[s] = true
+	}
+	for _, s := range set2 {
+		if m1[s] {
+			ss = append(ss, s)
 		}
 	}
 	return
 }
 
-func rexes(ss []string) (rs []regexp.Regexp) {
-	for i, s := range ss {
-		r, err := regexp.Compile(s)
-		if err != nil {
-			msg := "illegal regular expression at position %d: %v"
-			log.Fatal(fmt.Errorf(msg, i, err))
+// set1 - set2, also known as except
+// result order undefined
+func minus(set1 []string, set2 []string) (ss []string) {
+	m1 := make(map[string]bool, len(set1))
+	for _, s := range set1 {
+		m1[s] = true
+	}
+	for _, s := range set2 {
+		m1[s] = false
+	}
+	for k, v := range m1 {
+		if v {
+			ss = append(ss, k)
 		}
-		rs = append(rs, *r)
 	}
 	return
 }
