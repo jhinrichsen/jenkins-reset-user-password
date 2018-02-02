@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/xml"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"os"
@@ -10,15 +12,25 @@ import (
 )
 
 const (
+	configFilename = "config.xml"
 	defaultUserdir = "${JENKINS_HOME}/users"
+	indentation    = "  "
+	// 'test'
+	defaultPassword = "#jbcrypt:$2a$10$tj0D.U.XvHRW41qwpFvSq.ivWTpBK" +
+		"DzjBBNeSF3V.oDi0/E0K4B7a"
 )
 
 // return codes:
 // 1 wrong usage
 // 2 missing JENKINS_HOME environment variable
 func main() {
+	dryrun := flag.Bool("dryrun", false, "reporting only, no changes")
 	not := flag.Bool("not", false,
 		"invert regular expressions (match -> no match)")
+	/*
+		password := flag.String("password", defaultPassword,
+			"new encrypted password ('test')")
+	*/
 	userdir := flag.String("userdir", defaultUserdir,
 		"Jenkins user directory")
 	flag.Usage = Usage
@@ -39,6 +51,18 @@ func main() {
 		log.Printf("user %s matches\n", u)
 	}
 	log.Printf("total %d match(es)\n", len(users))
+
+	for _, u := range users {
+		filename := filepath.Join(*userdir, u, configFilename)
+		if *dryrun {
+			log.Printf("dryrun: skipping %s\n", filename)
+		} else {
+			log.Printf("processing %s\n", filename)
+			f2 := filename + ".0"
+			cp(filename, f2)
+			resetPassword(f2, filename)
+		}
+	}
 }
 
 func Usage() {
@@ -47,6 +71,24 @@ func Usage() {
 		"user IDs may contain regexp\n"
 	fmt.Fprintf(os.Stderr, desc)
 	flag.PrintDefaults()
+}
+
+func cp(src, dst string) error {
+	s, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+
+	d, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(d, s); err != nil {
+		d.Close()
+		return err
+	}
+	return d.Close()
 }
 
 func die(err error) {
@@ -104,4 +146,49 @@ func minus(set1 []string, set2 []string) (ss []string) {
 		}
 	}
 	return
+}
+
+func resetPassword(fromFilename, intoFilename string) {
+	fromfile, err := os.Open(fromFilename)
+	die(err)
+	defer fromfile.Close()
+	dec := xml.NewDecoder(fromfile)
+
+	intofile, err := os.Create(intoFilename)
+	die(err)
+	defer intofile.Close()
+	enc := xml.NewEncoder(intofile)
+	enc.Indent("", indentation)
+
+	triggered := false
+	for {
+		// Token() returns nil, io.EOF at end of input stream
+		tok, err := dec.Token()
+		// end of stream?
+		if tok == nil && err == io.EOF {
+			break
+		}
+		die(err)
+
+		if triggered {
+			switch tok.(type) {
+			case xml.CharData:
+				tok = xml.CharData(defaultPassword)
+				// log.Printf("replaced with token: %+v\n",
+				//	defaultPassword)
+			}
+			triggered = false
+		}
+		switch typ := tok.(type) {
+		case xml.StartElement:
+			if typ.Name.Local == "passwordHash" {
+				// next node is our text
+				triggered = true
+			}
+		}
+		// log.Printf("writing %+v\n", tok)
+		err = enc.EncodeToken(tok)
+		die(err)
+	}
+	enc.Flush()
 }
